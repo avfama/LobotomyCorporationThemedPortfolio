@@ -9,6 +9,7 @@ import { BreachProtocol } from './components/BreachProtocol';
 import { ManagerCard } from './components/ManagerCard';
 import { Profile } from './components/Profile';
 import { Users, Box, AlertTriangle, UserCog, User } from 'lucide-react';
+import { api } from '../utils/api';
 
 export interface Employee {
   id: string;
@@ -67,10 +68,32 @@ function App() {
   const [meltdownState, setMeltdownState] = useState<'normal' | 'critical' | 'rebooting'>('normal');
   const [rebootProgress, setRebootProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [syncEnabled, setSyncEnabled] = useState(true);
   
   const createAlertId = () => {
     setAlertCounter(prev => prev + 1);
     return `A-${Date.now()}-${alertCounter}`;
+  };
+
+  // Helper function to add alert and save to database
+  const addAlert = (type: 'info' | 'warning' | 'danger', message: string) => {
+    const newAlert: Alert = {
+      id: `A-${Date.now()}-${Math.random()}`,
+      type,
+      message,
+      time: new Date().toLocaleTimeString()
+    };
+    
+    setAlerts(prev => [newAlert, ...prev]);
+    
+    // Save to database table
+    const timestamp = new Date().toISOString();
+    api.alertsTable.create(timestamp, message).catch(error => {
+      console.warn('Could not save alert to database:', error);
+    });
+    
+    return newAlert;
   };
   
   const [employees, setEmployees] = useState<Employee[]>([
@@ -126,6 +149,107 @@ function App() {
     { id: 'M-010', name: 'Binah', department: 'Extraction Team', color: '#000000', status: 'active', efficiency: 100 }
   ]);
 
+  // Load initial state from Supabase
+  useEffect(() => {
+    const loadGameState = async () => {
+      try {
+        const data: any = await api.getGameState();
+        
+        if (data && data.employees && data.employees.length > 0) {
+          // Load existing state from database
+          setEmployees(data.employees);
+          setContainmentUnits(data.containmentUnits);
+          setManagers(data.managers);
+          setAlerts(data.alerts || []);
+          if (data.meltdownState) {
+            setMeltdownState(data.meltdownState.state);
+            setRebootProgress(data.meltdownState.progress);
+          }
+        } else {
+          // Initialize database with default state
+          const defaultState = {
+            employees,
+            containmentUnits,
+            alerts: [],
+            managers
+          };
+          await api.initialize(defaultState);
+        }
+      } catch (error) {
+        console.error('Failed to load game state:', error);
+        // Continue with default state if loading fails
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadGameState();
+  }, []); // Run only once on mount
+
+  // Sync employees to Supabase
+  useEffect(() => {
+    if (isLoading || !syncEnabled) return;
+    
+    const saveEmployees = async () => {
+      try {
+        await api.updateEmployees(employees);
+      } catch (error) {
+        console.error('Failed to sync employees:', error);
+      }
+    };
+    
+    const debounce = setTimeout(saveEmployees, 500);
+    return () => clearTimeout(debounce);
+  }, [employees, isLoading, syncEnabled]);
+
+  // Sync containment units to Supabase
+  useEffect(() => {
+    if (isLoading || !syncEnabled) return;
+    
+    const saveUnits = async () => {
+      try {
+        await api.updateContainmentUnits(containmentUnits);
+      } catch (error) {
+        console.error('Failed to sync containment units:', error);
+      }
+    };
+    
+    const debounce = setTimeout(saveUnits, 500);
+    return () => clearTimeout(debounce);
+  }, [containmentUnits, isLoading, syncEnabled]);
+
+  // Sync alerts to Supabase
+  useEffect(() => {
+    if (isLoading || !syncEnabled) return;
+    
+    const saveAlerts = async () => {
+      try {
+        await api.updateAlerts(alerts);
+      } catch (error) {
+        console.error('Failed to sync alerts:', error);
+      }
+    };
+    
+    const debounce = setTimeout(saveAlerts, 500);
+    return () => clearTimeout(debounce);
+  }, [alerts, isLoading, syncEnabled]);
+
+  // Sync meltdown state to Supabase
+  useEffect(() => {
+    if (isLoading || !syncEnabled) return;
+    
+    const saveMeltdownState = async () => {
+      try {
+        await api.updateMeltdownState({ state: meltdownState, progress: rebootProgress });
+      } catch (error) {
+        console.error('Failed to sync meltdown state:', error);
+      }
+    };
+    
+    const debounce = setTimeout(saveMeltdownState, 500);
+    return () => clearTimeout(debounce);
+  }, [meltdownState, rebootProgress, isLoading, syncEnabled]);
+
   // Qliphoth Counter depletion
   useEffect(() => {
     if (isPaused || activeTab === 'profile') return;
@@ -153,12 +277,7 @@ function App() {
 
         // Check if breached
         if (newCounter <= 0 && unit.status !== 'breached') {
-          setAlerts(prev => [{
-            id: `A-${Date.now()}-${Math.random()}`,
-            type: 'danger' as const,
-            message: `CONTAINMENT BREACH: ${unit.id} - ${unit.name}`,
-            time: new Date().toLocaleTimeString()
-          }, ...prev]);
+          addAlert('danger' as const, `CONTAINMENT BREACH: ${unit.id} - ${unit.name}`);
           
           return { ...unit, qliphothCounter: 0, status: 'breached' as const };
         }
@@ -219,12 +338,7 @@ function App() {
             newHp = 0;
             newStatus = 'idle';
             disabledUntil = Date.now() + 5 * 60 * 1000; // 5 minutes
-            setAlerts(prev => [{
-              id: `A-${Date.now()}-${Math.random()}`,
-              type: 'danger' as const,
-              message: `${emp.name} lost consciousness - recovering for 5 minutes`,
-              time: new Date().toLocaleTimeString()
-            }, ...prev]);
+            addAlert('danger' as const, `${emp.name} lost consciousness - recovering for 5 minutes`);
           }
         } else {
           // Determine behavior based on MP
@@ -245,12 +359,7 @@ function App() {
                 newHp = 0;
                 newStatus = 'idle';
                 disabledUntil = Date.now() + 5 * 60 * 1000; // 5 minutes
-                setAlerts(prev => [{
-                  id: `A-${Date.now()}-${Math.random()}`,
-                  type: 'danger' as const,
-                  message: `${emp.name} collapsed from mental strain - recovering for 5 minutes`,
-                  time: new Date().toLocaleTimeString()
-                }, ...prev]);
+                addAlert('danger' as const, `${emp.name} collapsed from mental strain - recovering for 5 minutes`);
               }
             }
           }
@@ -279,12 +388,7 @@ function App() {
 
     // Check if employee is disabled
     if (employee.disabledUntil && Date.now() < employee.disabledUntil) {
-      setAlerts(prev => [{
-        id: createAlertId(),
-        type: 'warning' as const,
-        message: `${employee.name} is still recovering and cannot be assigned`,
-        time: new Date().toLocaleTimeString()
-      }, ...prev]);
+      addAlert('warning' as const, `${employee.name} is still recovering and cannot be assigned`);
       return;
     }
 
@@ -323,12 +427,7 @@ function App() {
 
     // Add alert
     const performanceNote = isSuccess ? '' : ' - REDUCED EFFECTIVENESS';
-    setAlerts(prev => [{
-      id: `A-${Date.now()}-${Math.random()}`,
-      type: isSuccess ? 'info' as const : 'warning' as const,
-      message: `${employee.name} assigned to ${unit.id} (${workType})${bonusReplenish > 0 ? ' - FAVORED UNIT BONUS!' : ''}${performanceNote}`,
-      time: new Date().toLocaleTimeString()
-    }, ...prev]);
+    addAlert(isSuccess ? 'info' as const : 'warning' as const, `${employee.name} assigned to ${unit.id} (${workType})${bonusReplenish > 0 ? ' - FAVORED UNIT BONUS!' : ''}${performanceNote}`);
 
     // Simulate work completion after 5 seconds
     setTimeout(() => {
@@ -354,24 +453,14 @@ function App() {
     setEmployees(prev => prev.map(emp =>
       emp.id === employeeId ? { ...emp, status: 'wellness' as const } : emp
     ));
-    setAlerts(prev => [{
-      id: createAlertId(),
-      type: 'info' as const,
-      message: `${employees.find(e => e.id === employeeId)?.name} sent to Wellness`,
-      time: new Date().toLocaleTimeString()
-    }, ...prev]);
+    addAlert('info' as const, `${employees.find(e => e.id === employeeId)?.name} sent to Wellness`);
   };
 
   const handleSendToMedical = (employeeId: string) => {
     setEmployees(prev => prev.map(emp =>
       emp.id === employeeId ? { ...emp, status: 'medical' as const } : emp
     ));
-    setAlerts(prev => [{
-      id: createAlertId(),
-      type: 'info' as const,
-      message: `${employees.find(e => e.id === employeeId)?.name} sent to Medical`,
-      time: new Date().toLocaleTimeString()
-    }, ...prev]);
+    addAlert('info' as const, `${employees.find(e => e.id === employeeId)?.name} sent to Medical`);
   };
 
   const handleRecallEmployee = (employeeId: string) => {
@@ -391,12 +480,7 @@ function App() {
     const disabledEmployees = deployedEmployees.filter(e => e.disabledUntil && Date.now() < e.disabledUntil);
     
     if (disabledEmployees.length > 0) {
-      setAlerts(prev => [{
-        id: `A-${Date.now()}-${Math.random()}`,
-        type: 'warning' as const,
-        message: `Some employees are still recovering and cannot be deployed`,
-        time: new Date().toLocaleTimeString()
-      }, ...prev]);
+      addAlert('warning' as const, `Some employees are still recovering and cannot be deployed`);
       return;
     }
 
@@ -427,19 +511,9 @@ function App() {
         setContainmentUnits(prev => prev.map(u =>
           u.id === breachProtocolUnit ? { ...u, status: 'contained' as const, qliphothCounter: 100 } : u
         ));
-        setAlerts(prev => [{
-          id: `A-${Date.now()}-${Math.random()}`,
-          type: 'info' as const,
-          message: `REPRESSION SUCCESS: ${unit.id} contained`,
-          time: new Date().toLocaleTimeString()
-        }, ...prev]);
+        addAlert('info' as const, `REPRESSION SUCCESS: ${unit.id} contained`);
       } else {
-        setAlerts(prev => [{
-          id: `A-${Date.now()}-${Math.random()}`,
-          type: 'danger' as const,
-          message: `REPRESSION FAILED: ${unit.id} remains breached`,
-          time: new Date().toLocaleTimeString()
-        }, ...prev]);
+        addAlert('danger' as const, `REPRESSION FAILED: ${unit.id} remains breached`);
       }
 
       // Return employees to idle with HP/MP depletion
@@ -453,12 +527,7 @@ function App() {
           let disabledUntil = emp.disabledUntil;
           if (newHp <= 0) {
             disabledUntil = Date.now() + 5 * 60 * 1000; // 5 minutes
-            setAlerts(prev => [{
-              id: `A-${Date.now()}-${Math.random()}`,
-              type: 'danger' as const,
-              message: `${emp.name} was critically injured during repression - recovering for 5 minutes`,
-              time: new Date().toLocaleTimeString()
-            }, ...prev]);
+            addAlert('danger' as const, `${emp.name} was critically injured during repression - recovering for 5 minutes`);
           }
           
           return { 
@@ -518,8 +587,8 @@ function App() {
     }
   }, [meltdownLevel, meltdownState]);
 
-  const resetToInitialState = () => {
-    setEmployees([
+  const resetToInitialState = async () => {
+    const defaultEmployees = [
       { id: 'E-001', name: 'Agent Marcus', role: 'Control', type: 'Research', favoredUnit: 'O-01-23', stats: { fortitude: 3, prudence: 4, temperance: 2, justice: 3 }, status: 'idle', behavior: 'Calm', hp: 87, maxHp: 100, mp: 65, maxMp: 80 },
       { id: 'E-002', name: 'Agent Sarah', role: 'Information', type: 'Research', favoredUnit: 'T-02-43', stats: { fortitude: 2, prudence: 5, temperance: 4, justice: 2 }, status: 'idle', behavior: 'Calm', hp: 100, maxHp: 100, mp: 45, maxMp: 90 },
       { id: 'E-003', name: 'Agent Chen', role: 'Safety', type: 'Breach Protocol', stats: { fortitude: 4, prudence: 3, temperance: 3, justice: 4 }, status: 'idle', behavior: 'Calm', hp: 72, maxHp: 100, mp: 80, maxMp: 80 },
@@ -544,27 +613,42 @@ function App() {
       { id: 'E-022', name: 'Agent Titan', role: 'Safety', type: 'Breach Protocol', stats: { fortitude: 5, prudence: 2, temperance: 3, justice: 4 }, status: 'idle', behavior: 'Calm', hp: 96, maxHp: 100, mp: 80, maxMp: 80 },
       { id: 'E-023', name: 'Agent Willow', role: 'Training', type: 'Research', favoredUnit: 'O-01-23', stats: { fortitude: 3, prudence: 3, temperance: 5, justice: 2 }, status: 'idle', behavior: 'Stressed', hp: 83, maxHp: 100, mp: 62, maxMp: 85 },
       { id: 'E-024', name: 'Agent Viper', role: 'Security', type: 'Breach Protocol', stats: { fortitude: 4, prudence: 3, temperance: 2, justice: 5 }, status: 'idle', behavior: 'Calm', hp: 91, maxHp: 100, mp: 76, maxMp: 80 }
-    ]);
+    ];
     
-    setContainmentUnits([
+    const defaultUnits = [
       { id: 'O-01-23', name: 'One Sin and Hundreds of Good Deeds', riskLevel: 'ZAYIN', status: 'contained', workCount: 12, qliphothCounter: 100, maxQliphoth: 100 },
       { id: 'T-02-43', name: 'Fragment of the Universe', riskLevel: 'HE', status: 'contained', workCount: 7, qliphothCounter: 100, maxQliphoth: 100 },
       { id: 'F-01-69', name: 'Beauty and the Beast', riskLevel: 'WAW', status: 'contained', workCount: 3, qliphothCounter: 100, maxQliphoth: 100 },
       { id: 'O-02-56', name: 'Funeral of the Dead Butterflies', riskLevel: 'HE', status: 'contained', workCount: 15, qliphothCounter: 100, maxQliphoth: 100 },
       { id: 'T-01-75', name: 'Mountain of Smiling Bodies', riskLevel: 'ALEPH', status: 'contained', workCount: 1, qliphothCounter: 100, maxQliphoth: 100 },
       { id: 'F-05-52', name: 'Opened Can of WellCheers', riskLevel: 'TETH', status: 'contained', workCount: 9, qliphothCounter: 100, maxQliphoth: 100 }
-    ]);
+    ];
     
-    setAlerts([
+    const defaultAlerts = [
       { id: 'A-003', type: 'info' as const, message: 'All systems operational', time: new Date().toLocaleTimeString() }
-    ]);
+    ];
     
+    setEmployees(defaultEmployees);
+    setContainmentUnits(defaultUnits);
+    setAlerts(defaultAlerts);
     setMeltdownState('normal');
     setRebootProgress(0);
     setSelectedUnit(null);
     setSelectedEmployee(null);
     setBreachProtocolUnit(null);
     setIsPaused(false);
+    
+    // Sync to Supabase
+    try {
+      await api.reset({
+        employees: defaultEmployees,
+        containmentUnits: defaultUnits,
+        alerts: defaultAlerts,
+        managers
+      });
+    } catch (error) {
+      console.error('Failed to sync reset to database:', error);
+    }
   };
 
   const handleReset = () => {
@@ -589,6 +673,16 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-white font-mono">
+      {/* Loading Screen */}
+      {isLoading && (
+        <div className="fixed inset-0 z-[10000] bg-black flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-4xl font-bold text-[#66ff66] mb-4 animate-pulse">LOADING...</div>
+            <div className="text-sm text-[#888]">Connecting to Lobotomy Corporation Database</div>
+          </div>
+        </div>
+      )}
+
       {/* Pause Overlay */}
       {isPaused && (
         <div 
@@ -902,6 +996,16 @@ function App() {
           onClose={() => setBreachProtocolUnit(null)}
           onDeploy={handleDeployBreachProtocol}
         />
+      )}
+
+      {/* Database Connection Status Indicator */}
+      {!isLoading && (
+        <div className="fixed bottom-4 right-4 z-50">
+          <div className="bg-[#1a1a1a] border border-[#444] px-3 py-1.5 flex items-center gap-2 text-xs">
+            <div className="w-2 h-2 rounded-full bg-[#66ff66] animate-pulse"></div>
+            <span className="text-[#888]">CONNECTED TO DATABASE</span>
+          </div>
+        </div>
       )}
     </div>
   );
