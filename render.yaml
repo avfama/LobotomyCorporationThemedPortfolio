@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: lobotomy-backend
+    env: python
+    region: oregon
+    plan: free
+    repo: https://github.com/avfama/LobotomyCorporationThemedPortfolio
+    branch: main
+    buildCommand: pip install -r server/requirements.txt
+    startCommand: gunicorn server.app:app
+    envVars:
+      - key: SUPABASE_URL
+        value: ""
+      - key: SUPABASE_KEY
+        value: ""
