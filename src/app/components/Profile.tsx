@@ -1,4 +1,4 @@
-import profileImage from "figma:asset/5d139eb05029132ec988ef131574a550aab6234e.png";
+import profileImage from "@/assets/5d139eb05029132ec988ef131574a550aab6234e.png";
 
 export function Profile() {
   return (
